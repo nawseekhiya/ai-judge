@@ -1,0 +1,21 @@
+{
+  "name": "ai-judge-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "prepare": "husky",
+    "dev": "concurrently \"pnpm --filter ./client... run dev\" \"pnpm --filter ./server... run dev\"",
+    "build": "pnpm --filter ./client... run build && pnpm --filter ./server... run build",
+    "start": "concurrently \"pnpm --filter ./client... start\" \"pnpm --filter ./server... start\""
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx,json,css,md}": [
+      "eslint --fix",
+      "prettier --write"
+    ]
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "husky": "^9.1.7"
+  }
+}

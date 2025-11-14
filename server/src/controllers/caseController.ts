@@ -1,49 +1,58 @@
 import { Request, Response, NextFunction } from 'express';
-import { v4 as uuidv4 } from 'uuid';
-import type { Case, Argument, Verdict, Side } from '../types/index';
+import type { Side } from '../types/index';
 import { AppError, asyncHandler } from '../middleware/errorHandler';
 import { validators } from '../middleware/validation';
-
-// In-memory storage (replace with DB later)
-const casesDB: Map<string, Case> = new Map();
-const argumentsDB: Map<string, Argument> = new Map();
-const verdictsDB: Map<string, Verdict> = new Map();
+import prisma from '../lib/prisma';
+import { computeCaseHash } from '../utils/hash';
 
 export const createCase = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const body = validators.isObject(req.body, 'Request body');
   const title = validators.isString(body.title, 'Title');
   const description = body.description ? validators.isString(body.description, 'Description') : undefined;
-  // Duplicate detection: normalized title + description hash
-  const normalize = (s?: string) => (s || '').trim().toLowerCase();
-  const key = `${normalize(title)}||${normalize(description)}`;
 
-  // naive in-memory duplicate check: look for same normalized title+description
-  for (const existing of casesDB.values()) {
-    const existingKey = `${normalize(existing.title)}||${normalize(existing.description)}`;
-    if (existingKey === key) {
-      // Conflict: case already exists
-      throw new AppError(409, 'A case with the same title and description already exists');
-    }
+  // Compute content hash for deduplication
+  const contentHash = computeCaseHash(title, description, '');
+
+  // Check for duplicate using contentHash (enforced by unique constraint)
+  const existing = await prisma.case.findUnique({
+    where: { contentHash },
+  });
+
+  if (existing) {
+    throw new AppError(409, 'A case with the same title and description already exists');
   }
 
-  const newCase: Case = {
-    id: uuidv4(),
-    title,
-    description,
-    context: '',
-    arguments: [],
-    verdicts: [],
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
+  // Create case with Prisma
+  const newCase = await prisma.case.create({
+    data: {
+      title,
+      description,
+      context: '',
+      contentHash,
+    },
+    include: {
+      arguments: true,
+      verdicts: true,
+    },
+  });
 
-  casesDB.set(newCase.id, newCase);
   res.status(201).json(newCase);
 });
 
 export const getCase = asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  const id = validators.isValidUUID(req.params.id, 'Case ID');
-  const caseItem = casesDB.get(id);
+  const id = req.params.id;
+
+  const caseItem = await prisma.case.findUnique({
+    where: { id },
+    include: {
+      arguments: {
+        orderBy: { createdAt: 'asc' },
+      },
+      verdicts: {
+        orderBy: { createdAt: 'desc' },
+      },
+    },
+  });
 
   if (!caseItem) {
     throw new AppError(404, `Case with ID "${id}" not found`);
@@ -53,8 +62,12 @@ export const getCase = asyncHandler(async (req: Request, res: Response): Promise
 });
 
 export const uploadFile = asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  const id = validators.isValidUUID(req.params.id, 'Case ID');
-  const caseItem = casesDB.get(id);
+  const id = req.params.id;
+
+  // Verify case exists
+  const caseItem = await prisma.case.findUnique({
+    where: { id },
+  });
 
   if (!caseItem) {
     throw new AppError(404, `Case with ID "${id}" not found`);
@@ -74,37 +87,48 @@ export const uploadFile = asyncHandler(async (req: Request, res: Response): Prom
     throw new AppError(400, 'Either file or text content is required');
   }
 
-  caseItem.context = content;
-  caseItem.updatedAt = new Date();
-  casesDB.set(id, caseItem);
+  // Update case context and recompute content hash
+  const newContentHash = computeCaseHash(caseItem.title, caseItem.description || undefined, content);
 
-  res.json(caseItem);
+  const updatedCase = await prisma.case.update({
+    where: { id },
+    data: {
+      context: content,
+      contentHash: newContentHash,
+    },
+    include: {
+      arguments: true,
+      verdicts: true,
+    },
+  });
+
+  res.json(updatedCase);
 });
 
 export const addArgument = asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  const id = validators.isValidUUID(req.params.id, 'Case ID');
+  const id = req.params.id;
   const body = validators.isObject(req.body, 'Request body');
   
   const side = validators.isValidSide(validators.hasProperty(body, 'side', 'side'));
   const text = validators.isString(body.text, 'Argument text');
 
-  const caseItem = casesDB.get(id);
+  // Verify case exists
+  const caseItem = await prisma.case.findUnique({
+    where: { id },
+  });
+
   if (!caseItem) {
     throw new AppError(404, `Case with ID "${id}" not found`);
   }
 
-  const newArgument: Argument = {
-    id: uuidv4(),
-    caseId: id,
-    side: side as Side,
-    text,
-    createdAt: new Date(),
-  };
-
-  argumentsDB.set(newArgument.id, newArgument);
-  caseItem.arguments.push(newArgument);
-  caseItem.updatedAt = new Date();
-  casesDB.set(id, caseItem);
+  // Create argument with Prisma
+  const newArgument = await prisma.argument.create({
+    data: {
+      caseId: id,
+      side: side as Side,
+      text,
+    },
+  });
 
   res.status(201).json(newArgument);
 });

@@ -4,10 +4,14 @@ import express, { Request, Response } from 'express';
 import aiRouter from './routes/ai';
 import casesRouter from './routes/cases';
 import { errorHandler } from './middleware/errorHandler';
+import { idempotencyMiddleware } from './middleware/idempotency';
 
 const app = express();
 
 app.use(express.json());
+
+// Idempotency middleware (before routes)
+app.use(idempotencyMiddleware);
 
 // Mount routers
 app.use('/api/ai', aiRouter);

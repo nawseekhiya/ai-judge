@@ -1,0 +1,88 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Case model: represents a debate/judgment case
+model Case {
+  id          String   @id @default(cuid())
+  title       String   @unique
+  description String?
+  context     String?  // the uploaded or pasted content
+  contentHash String   @unique // SHA-256 hash of normalized title+description+context for deduplication
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  arguments Argument[]
+  verdicts  Verdict[]
+
+  @@index([createdAt])
+  @@index([contentHash])
+}
+
+// Argument model: represents a side's argument in a case
+model Argument {
+  id        String   @id @default(cuid())
+  caseId    String
+  side      String   // 'A' or 'B'
+  text      String
+  createdAt DateTime @default(now())
+
+  // Relations
+  case     Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  verdicts Verdict[]
+
+  @@index([caseId])
+  @@index([side])
+}
+
+// Verdict model: represents AI judge verdict on an argument
+model Verdict {
+  id          String   @id @default(cuid())
+  caseId      String
+  argumentId  String
+  verdict     String   // 'SUPPORTED', 'REFUTED', 'NEUTRAL', etc.
+  reasoning   String   // AI explanation
+  score       Float?   // optional confidence/strength score (0-1)
+  createdAt   DateTime @default(now())
+
+  // Relations
+  case     Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  argument Argument @relation(fields: [argumentId], references: [id], onDelete: Cascade)
+
+  @@index([caseId])
+  @@index([argumentId])
+  @@index([verdict])
+}
+
+// IdempotencyKey model: prevents duplicate requests within TTL window
+model IdempotencyKey {
+  id              String   @id @default(cuid())
+  key             String   @unique // client-provided idempotency key
+  method          String   // HTTP method (POST, etc.)
+  path            String   // request path
+  statusCode      Int      // response status code
+  responseBody    Json     // serialized response body
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime // TTL: auto-delete after this time
+
+  @@index([key])
+  @@index([expiresAt])
+}
+
+// Optional: User/Session model (future extension)
+// model User {
+//   id    String @id @default(cuid())
+//   email String @unique
+//   name  String?
+//   createdAt DateTime @default(now())
+// }
